@@ -1,3 +1,11 @@
+# local ignore
+
+input/*
+working/models/*
+working/logs/*
+working/submissions/*
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
