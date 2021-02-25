@@ -1,10 +1,11 @@
 # kaggle-bengali-handwritten
 
-<img src="poster.png"
-     alt="Markdown Monster icon"
-     style="float: right; margin-right: 10px;" 
-     width=300
-     height=300/>
+<p align="center">
+  <img src="poster.png"
+  alt="Markdown Monster icon"
+      width=800
+      height=500/>
+</p>
 
 ## Description (Copied from kaggle)
 
