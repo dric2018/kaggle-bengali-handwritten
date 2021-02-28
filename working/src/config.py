@@ -20,6 +20,7 @@ class Config:
     width = 236
     train_batch_size = 32
     test_batch_size = 32
+    # seresnet50, seresnet152, efficientnet_b3, resnet101, resnext50_32x4d
     base_model = "resnet34"
     learning_rate = 1e-2
     num_workers = 3
