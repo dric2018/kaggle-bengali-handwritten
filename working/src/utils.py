@@ -65,3 +65,5 @@ def show_batch(df:pd.DataFrame, subset="valid"):
 
     plt.axis('off')
     plt.show()
+    
+     

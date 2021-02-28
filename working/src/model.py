@@ -21,7 +21,7 @@ from pytorch_lightning import seed_everything
 import pytorch_lightning.metrics.functional as metrics
 
 
-from config import Config
+from .config import Config
 
 # seed
 seed_everything(Config.seed_val)
