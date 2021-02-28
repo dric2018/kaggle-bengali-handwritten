@@ -15,13 +15,16 @@ import os
 import pandas as pd
 import numpy as np
 import sys
+import gc
 
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 import pytorch_lightning.metrics.functional as metrics
 
-
-from .config import Config
+try:
+    from .config import Config
+except ImportError:
+    from config import Config
 
 # seed
 seed_everything(Config.seed_val)
@@ -134,35 +137,85 @@ class GraphemeClassifier(pl.LightningModule):
 
         return [optimizer], [scheduler]
 
-    def compute_metrics(self, preds, targets):
+    def compute_eval_metrics(self, preds: dict, targets: dict):
+        """
+            Compute evaluation metrics
+        """
         g_root_metric = metrics.recall(
-            preds=preds,
-            target=targets,
+            preds=preds['g_logits'],
+            target=targets['g_targets'],
             average="macro",
             num_classes=168,
             is_multiclass=True
         )
         vowels_metric = metrics.recall(
-            preds=preds,
-            target=targets,
+            preds=preds['v_logits'],
+            target=targets['v_targets'],
             average="macro",
             num_classes=11,
             is_multiclass=True
         )
         consonant_metric = metrics.recall(
-            preds=preds,
-            target=targets,
+            preds=preds['c_logits'],
+            target=targets['c_targets'],
             average="macro",
             num_classes=7,
             is_multiclass=True
         )
 
-    def compute_losses(self, preds, targets):
-        g_loss = nn.NLLLoss(weight=None,)(preds, targets)
-        v_loss = nn.NLLLoss(weight=None,)(preds, targets)
-        c_loss = nn.NLLLoss(weight=None,)(preds, targets)
+        eval_metrics = {
+            "g_metric": g_root_metric,
+            "v_metric": vowels_metric,
+            "c_metric": consonant_metric
+        }
 
-        return g_loss, v_loss, c_loss
+        return eval_metrics
+
+    def compute_losses(self, logits: dict, targets: dict):
+        """
+            Compute losses using using crossentropy loss fn
+        """
+        # grapheme root loss
+        g_loss = nn.NLLLoss(
+            weight=self.hparams.g_root_class_weight
+        )(logits['g_logits'].detach().cpu(), targets['g_targets'].detach().cpu())
+
+        # vowels diacritic loss
+        v_loss = nn.NLLLoss(
+            weight=self.hparams.vowels_class_weight
+        )(logits['v_logits'].detach().cpu(), targets['v_targets'].detach().cpu())
+
+        # consonant diacritic loss
+        c_loss = nn.NLLLoss(
+            weight=self.hparams.consonant_class_weight
+        )(logits['c_logits'].detach().cpu(), targets['c_targets'].detach().cpu())
+
+        # loss map
+        losses = {
+            "g_loss": g_loss,
+            "v_loss": v_loss,
+            "c_loss": c_loss
+        }
+        return losses
+
+    def get_predictions(self, logits: dict):
+        """
+            convert logits to predictions
+        """
+        try:
+            g_preds = logits['g_logits'].detach().cpu().argmax(dim=1)
+            v_preds = logits['v_logits'].detach().cpu().argmax(dim=1)
+            c_preds = logits['c_logits'].detach().cpu().argmax(dim=1)
+
+            preds = {
+                "g_preds": g_preds,
+                "v_preds": v_preds,
+                "c_preds": c_preds
+            }
+
+            return preds
+        except TypeError:
+            print('[ERROR] logits are not well given')
 
     def forward(self, x):
         if self.extractor is not None:
@@ -178,27 +231,76 @@ class GraphemeClassifier(pl.LightningModule):
             v = self.vowel_diacritic_decoder(out)
             c = self.consonant_diacritic_decoder(out)
 
-            return LogSoftmax(dim=-1)(g), LogSoftmax(dim=-1)(v), LogSoftmax(dim=-1)(c)
+            logits = {
+                "g_logits": LogSoftmax(dim=-1)(g),
+                "v_logits": LogSoftmax(dim=-1)(v),
+                "c_logits": LogSoftmax(dim=-1)(c)
+            }
+
+            return logits
         else:
             print('[ERROR] extractor not found ')
             return None, None, None
 
     def training_step(self, batch_idx, batch):
-        images, g_targets, v_targets, c_targets, _ = batch
-        pass
+        images = batch['image']
+        targets = {
+            "g_targets": batch['grapheme_root'],
+            "v_targets": batch['vowel_diacritic'],
+            "c_targets": batch['consonant_diacritic']
+        }
+
+        # make prediction
+        logits = self(x=images)
+
+        # compute losses
+        losses = self.compute_losses(
+            logits=logits,
+            targets=targets
+        )
+
+        # get predictions
+        preds = self.get_predictions(logits=logits)
+
+        # compute metrics
+        eval_metrics = self.compute_eval_metrics(
+            preds=preds,
+            targets=targets
+        )
 
     def validation_step(self, batch_idx, batch):
-        images, g_targets, v_targets, c_targets, _ = batch
+        images, g_targets, v_targets, c_targets = batch
         pass
 
 
 if __name__ == '__main__':
+
     dummy_data = th.rand((4, 1, Config.height, Config.width)).cuda()
+    dummy_targets = {
+        "g_targets": th.randint(low=0, high=168, size=[4]),
+        "v_targets": th.randint(low=0, high=11, size=[4]),
+        "c_targets": th.randint(low=0, high=7, size=[4])
+    }
+
+    print(dummy_targets)
     net = GraphemeClassifier(arch_from="timm").cuda()
-    g_logits, v_logits, c_logits = net(dummy_data)
+
+    logits = net(dummy_data)
+    g_logits = logits["g_logits"]
+    v_logits = logits['v_logits']
+    c_logits = logits["c_logits"]
+
+    preds = net.get_predictions(logits=logits)
+    losses = net.compute_losses(logits=logits, targets=dummy_targets)
+
     try:
         print(f"g_logits : {g_logits.shape}")
         print(f"v_logits : {v_logits.shape}")
         print(f"c_logits : {c_logits.shape}")
-    except:
-        pass
+
+        print(preds)
+        print(losses)
+    except Exception as ex:
+        print(ex)
+
+    gc.collect()
