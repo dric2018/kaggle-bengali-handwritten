@@ -5,9 +5,23 @@ import matplotlib.pyplot as plt
 import sklearn.metrics
 import numpy as np
 
+import torch as th
+import pytorch_lightning as pl
 
-from .config import Config
-from .dataset import DataModule
+try:
+
+    from .config import Config
+    from .dataset import DataModule, GraphemeDataset
+    from .model import GraphemeClassifier
+except ImportError:
+
+    from config import Config
+    from dataset import DataModule, GraphemeDataset
+    from model import GraphemeClassifier
+
+from tqdm.auto import tqdm
+
+from sklearn.model_selection import KFold, StratifiedKFold
 
 
 def get_parquet_lists():
@@ -97,17 +111,40 @@ def compute_model_score(solution: pd.DataFrame, submission: pd.DataFrame):
     return final_score
 
 
-def train_model():
-    pass
+def train_model(model: GraphemeClassifier, datamodule: DataModule, trainer: pl.Trainer):
+    """
+         Train model in one go
+    """
+    th.cuda.empty_cache()
+    trainer.fit(
+        model=model,
+        datamodule=datamodule
+    )
+
+    gc.collect()
+
+    return trainer, model
 
 
-def evaluate_model():
-    pass
-
-
-def run_kFold():
+def run_kFold(df: pd.DataFrame, n_folds: int = 5, stratified=True, frac=1, test_size=.2):
+    """
+         Train model using KFold/Stratified Kfold cross validation
+    """
     pass
 
 
 def run_inference():
+    pass
+
+
+# data augmentation functions
+def mixup():
+    pass
+
+
+def fmix():
+    pass
+
+
+def cutmix():
     pass

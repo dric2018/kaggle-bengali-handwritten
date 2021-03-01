@@ -18,15 +18,16 @@ class Config:
     seed_val = 2021
     height = 137
     width = 236
-    resize_shape = (150, 150)
-    train_batch_size = 1024
-    test_batch_size = 1024
-    epochs = 50
+    resize_shape = (100, 100)
+    train_batch_size = 512
+    test_batch_size = 512
+    epochs = 60
     # seresnet50, seresnet152, efficientnet_b3, resnet101, resnext50_32x4d
-    base_model = "resnet34"
-    learning_rate = 0.4
+    base_model = "resnet18"
+    learning_rate = 0.04
     num_workers = 4
     device = "cuda"  # cuda -> GPU, "cpu"->CPU, "tpu"->TPU
+    data_transform = "basic"  # fmix, cutmix, mixup
 
 
 if __name__ == '__main__':
