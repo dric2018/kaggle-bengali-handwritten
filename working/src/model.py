@@ -1,44 +1,27 @@
+import os
+from utils import ramp_scheduler
+import pytorch_lightning as pl
+from pytorch_lightning.metrics.functional import recall
+
+from config import Config
+import timm  # for some extra architectures such as se_resnet, resnext, efficientnet, etc
+
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import LogSoftmax
 
-# optimization
-import torch.optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR, StepLR, ExponentialLR
+from torch import optim
 
 
-# vision packages/models packages
-from torchvision import models, transforms
-import timm  # for some extra architectures such as se_resnet, resnext, efficientnet, etc
+class Model(pl.LightningModule):
 
-import os
-import pandas as pd
-import numpy as np
-import sys
-import gc
-
-import pytorch_lightning as pl
-from pytorch_lightning import seed_everything
-import pytorch_lightning.metrics.functional as metrics
-
-try:
-    from .config import Config
-except ImportError:
-    from config import Config
-
-# seed
-seed_everything(Config.seed_val)
-
-
-class GraphemeClassifier(pl.LightningModule):
+    # Model architecture
     """
         A 3 in 1 model which take the image as input and then:
             - extracts features (encoder)
             - classifies the recognized grapheme root into 168 classes (grapheme_root_decoder)
             - classifies the recognized vowel diacritic into 11 classes (vowel_diacritic_decoder)
             - classifies the recognized consonant diacritic 7 classes (consonant_diacritic_decoder)
-
         :params :
     """
 
@@ -53,25 +36,21 @@ class GraphemeClassifier(pl.LightningModule):
                  pretrained=False
 
                  ):
-        super().__init__()
+        super(Model, self).__init__()
 
         self.save_hyperparameters()
 
         # defining encoder
-        try:
-            if self.hparams.arch_from == 'torchvision':
-                self.extractor = getattr(
-                    models, self.hparams.base_encoder
-                )(pretrained=self.hparams.pretrained)
-            else:
-                self.extractor = timm.create_model(
-                    self.hparams.base_encoder,
-                    features_only=False,
-                    pretrained=self.hparams.pretrained
-                )
-        except Exception as ex:
-            # print(f'[ERROR] {ex}')
-            self.extractor = None
+        if self.hparams.arch_from == 'torchvision':
+            self.extractor = getattr(
+                models, self.hparams.base_encoder
+            )(pretrained=self.hparams.pretrained)
+        else:
+            self.extractor = timm.create_model(
+                self.hparams.base_encoder,
+                features_only=False,
+                pretrained=self.hparams.pretrained
+            )
 
         # print(self.extractor)
         self.encoder = nn.Sequential(
@@ -126,136 +105,119 @@ class GraphemeClassifier(pl.LightningModule):
                 pass
 
     def configure_optimizers(self):
-        optimizer = optim.SGD(
+        opt = optim.AdamW(
             params=self.parameters(),
             lr=self.hparams.lr,
-            # eps=1e-8,
-            # weight_decay=1e-3
+            eps=1e-8,
+            weight_decay=1e-3
         )
 
-        scheduler = CosineAnnealingLR(
-            optimizer=optimizer,
-            T_max=Config.epochs // 5,
-            eta_min=Config.learning_rate,
-            last_epoch=-1,
-            verbose=False
+        scheduler = th.optim.lr_scheduler.LambdaLR(
+            optimizer=opt,
+            lr_lambda=ramp_scheduler,
+            verbose=True
         )
 
-        return [optimizer], [scheduler]
+        return [opt], [scheduler]
 
-    def compute_eval_metrics(self, preds: dict, targets: dict):
+    def forward(self, x):
+        # extract features
+        features = self.encoder(x)
+
+        # apply dropout layer
+        out = self.dropout_layer(features)
+
+        # make classifications
+        g = self.grapheme_root_decoder(out)
+        v = self.vowel_diacritic_decoder(out)
+        c = self.consonant_diacritic_decoder(out)
+
+        g_logits = F.log_softmax(g, dim=1)
+        v_logits = F.log_softmax(v, dim=1)
+        c_logits = F.log_softmax(c, dim=1)
+
+        return (g_logits, v_logits, c_logits)
+
+    def compute_eval_metrics(self, preds: tuple, targets: dict):
         """
             Compute evaluation metrics
         """
-        g_root_metric = metrics.recall(
-            preds=preds['g_preds'].cpu(),
-            target=targets['g_targets'].cpu(),
+        g_preds = preds[0]
+        v_preds = preds[1]
+        c_preds = preds[2]
+
+        g_root_metric = recall(
+            preds=g_preds,
+            target=targets['g_targets'],
             average="macro",
             num_classes=168,
             is_multiclass=True
         )
-        vowels_metric = metrics.recall(
-            preds=preds['v_preds'].cpu(),
-            target=targets['v_targets'].cpu(),
+        vowels_metric = recall(
+            preds=v_preds,
+            target=targets['v_targets'],
             average="macro",
             num_classes=11,
             is_multiclass=True
         )
-        consonant_metric = metrics.recall(
-            preds=preds['c_preds'].cpu(),
-            target=targets['c_targets'].cpu(),
+        consonant_metric = recall(
+            preds=c_preds,
+            target=targets['c_targets'],
             average="macro",
             num_classes=7,
             is_multiclass=True
         )
 
-        eval_metrics = {
-            "g_metric": g_root_metric,
-            "v_metric": vowels_metric,
-            "c_metric": consonant_metric
-        }
+        return (g_root_metric, vowels_metric, consonant_metric)
 
-        return eval_metrics
-
-    def compute_avg_recall(self, metrics: dict):
-
-        avg_recall = (metrics['g_metric']*.5 +
-                      metrics['v_metric']*.25 + metrics['c_metric']*.5) / 3
+    def compute_avg_recall(self, metrics: tuple):
+        g_metric, v_metric, c_metric = metrics[0], metrics[1], metrics[2]
+        avg_recall = (g_metric*.5 + v_metric*.25 + c_metric*.25) / 3
 
         return avg_recall
 
-    def compute_loss(self, logits: dict, targets: dict):
+    def compute_loss(self, logits: tuple, targets: dict):
         """
             Compute losses using using crossentropy loss fn
         """
+        g_logits, v_logits, c_logits = logits[0], logits[1], logits[2]
+
         # grapheme root loss
         g_loss = F.nll_loss(
             weight=self.hparams.g_root_class_weight,
-            input=logits['g_logits'].cpu(),
-            target=targets['g_targets'].cpu()
+            input=g_logits,
+            target=targets['g_targets']
         )
 
         # vowels diacritic loss
         v_loss = F.nll_loss(
             weight=self.hparams.vowels_class_weight,
-            input=logits['v_logits'].cpu(),
-            target=targets['v_targets'].cpu()
+            input=v_logits,
+            target=targets['v_targets']
         )
 
         # consonant diacritic loss
         c_loss = F.nll_loss(
             weight=self.hparams.consonant_class_weight,
-            input=logits['c_logits'].cpu(),
-            target=targets['c_targets'].cpu()
+            input=c_logits,
+            target=targets['c_targets']
         )
 
         return (g_loss*.5 + v_loss*.25 + c_loss*.25) / 3
 
-    def get_predictions(self, logits: dict):
+    def get_predictions(self, logits: tuple):
         """
             convert logits to predictions
         """
-        try:
-            g_preds = logits['g_logits'].argmax(dim=1)
-            v_preds = logits['v_logits'].argmax(dim=1)
-            c_preds = logits['c_logits'].argmax(dim=1)
+        g_logits, v_logits, c_logits = logits[0], logits[1], logits[2]
+        g_preds = g_logits.argmax(dim=1)
+        v_preds = v_logits.argmax(dim=1)
+        c_preds = c_logits.argmax(dim=1)
 
-            preds = {
-                "g_preds": g_preds,
-                "v_preds": v_preds,
-                "c_preds": c_preds
-            }
-
-            return preds
-        except TypeError:
-            print('[ERROR] logits are not well given')
-
-    def forward(self, x):
-        if self.extractor is not None:
-            # extract features
-            features = self.encoder(x)
-
-            # apply dropout layer
-            out = self.dropout_layer(features)
-
-            # make classifications
-            g = self.grapheme_root_decoder(out)
-            v = self.vowel_diacritic_decoder(out)
-            c = self.consonant_diacritic_decoder(out)
-
-            logits = {
-                "g_logits": F.log_softmax(g, dim=1),
-                "v_logits": F.log_softmax(v, dim=1),
-                "c_logits": F.log_softmax(c, dim=1)
-            }
-
-            return logits
-        else:
-            print('[ERROR] extractor not found ')
-            return None, None, None
+        return (g_preds, v_preds, c_preds)
 
     def training_step(self, batch, batch_idx):
-        images = batch['image'].unsqueeze(1)
+        images = batch['image']
         targets = {
             "g_targets": batch['grapheme_root'],
             "v_targets": batch['vowel_diacritic'],
@@ -328,7 +290,7 @@ class GraphemeClassifier(pl.LightningModule):
                                           )
 
     def validation_step(self, batch, batch_idx):
-        images = batch['image'].unsqueeze(1)
+        images = batch['image']
         targets = {
             "g_targets": batch['grapheme_root'],
             "v_targets": batch['vowel_diacritic'],
@@ -403,37 +365,15 @@ class GraphemeClassifier(pl.LightningModule):
 
 
 if __name__ == '__main__':
+    model = Model(
+        base_encoder=Config.base_model,
+        arch_from='timm',
+        vowels_class_weight=None,
+        g_root_class_weight=None,
+        consonant_class_weight=None,
+        drop=0.3,
+        lr=Config.learning_rate,
+        pretrained=True
+    )
 
-    batch_size = 8
-
-    dummy_data = th.rand((batch_size, 1, Config.height, Config.width)).cuda()
-    dummy_targets = {
-        "g_targets": th.randint(low=0, high=168, size=[batch_size]),
-        "v_targets": th.randint(low=0, high=11, size=[batch_size]),
-        "c_targets": th.randint(low=0, high=7, size=[batch_size])
-    }
-
-    print(dummy_targets)
-    net = GraphemeClassifier(
-        arch_from="timm", base_encoder="densenet169").cuda()
-
-    try:
-        logits = net(dummy_data)
-        g_logits = logits["g_logits"]
-        v_logits = logits['v_logits']
-        c_logits = logits["c_logits"]
-
-        preds = net.get_predictions(logits=logits)
-        loss = net.compute_loss(logits=logits, targets=dummy_targets)
-
-        print(f"g_logits : {g_logits.shape}")
-        print(f"v_logits : {v_logits.shape}")
-        print(f"c_logits : {c_logits.shape}")
-
-        print(preds)
-        print(th.tensor(list(losses.values())).mean())
-
-    except Exception as ex:
-        print(ex)
-
-    gc.collect()
+    print(model)

@@ -1,6 +1,5 @@
 import os
 import pandas as pd
-import gc
 import matplotlib.pyplot as plt
 import sklearn.metrics
 import numpy as np
@@ -8,20 +7,35 @@ import numpy as np
 import torch as th
 import pytorch_lightning as pl
 
-try:
-
-    from .config import Config
-    from .dataset import DataModule, GraphemeDataset
-    from .model import GraphemeClassifier
-except ImportError:
-
-    from config import Config
-    from dataset import DataModule, GraphemeDataset
-    from model import GraphemeClassifier
+from config import Config
+from dataset import DataModule, GraphemeDataset
 
 from tqdm.auto import tqdm
 
 from sklearn.model_selection import KFold, StratifiedKFold
+
+# learning rate schedule params
+LR_START = 1e-5
+LR_MAX = 1e-3
+LR_RAMPUP_EPOCHS = 5
+LR_SUSTAIN_EPOCHS = 0
+LR_STEP_DECAY = 0.75
+
+# CUSTOM LEARNING SCHEUDLE
+# """
+# from https://www.kaggle.com/cdeotte/how-to-compete-with-gpus-workshop#STEP-4:-Training-Schedule
+# """
+
+
+def ramp_scheduler(epoch):
+    if epoch < LR_RAMPUP_EPOCHS:
+        lr = (LR_MAX - LR_START) / LR_RAMPUP_EPOCHS * epoch + LR_START
+    elif epoch < LR_RAMPUP_EPOCHS + LR_SUSTAIN_EPOCHS:
+        lr = LR_MAX
+    else:
+        lr = LR_MAX * \
+            LR_STEP_DECAY**((epoch - LR_RAMPUP_EPOCHS - LR_SUSTAIN_EPOCHS)//10)
+    return lr
 
 
 def get_parquet_lists():
@@ -55,7 +69,7 @@ def show_batch(df: pd.DataFrame, subset="valid"):
     else:
         batch = next(iter(dm.train_dataloader()))
 
-    images = batch['image']
+    images = batch['image'].squeeze(1)
     g_root = batch['grapheme_root']
     vowel_diacritic = batch['vowel_diacritic']
     consonant_diacritic = batch['consonant_diacritic']
@@ -111,17 +125,15 @@ def compute_model_score(solution: pd.DataFrame, submission: pd.DataFrame):
     return final_score
 
 
-def train_model(model: GraphemeClassifier, datamodule: DataModule, trainer: pl.Trainer):
+def train_model(model: pl.LightningModule, datamodule: DataModule, trainer: pl.Trainer):
     """
          Train model in one go
     """
-    th.cuda.empty_cache()
+    # th.cuda.empty_cache()
     trainer.fit(
         model=model,
         datamodule=datamodule
     )
-
-    gc.collect()
 
     return trainer, model
 

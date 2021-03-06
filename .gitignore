@@ -6,6 +6,7 @@ logs/
 submissions/
 .vscode/
 .ipynb_checkpoints/
+working/src/.ipynb_checkpoints/
 
 
 # Byte-compiled / optimized / DLL files

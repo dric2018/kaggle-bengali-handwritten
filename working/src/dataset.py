@@ -1,30 +1,19 @@
-# Base data manipulation stack
+
 import os
-import numpy as np
 import pandas as pd
-from PIL import Image
-
-# DL stack
+import numpy as np
 import torch as th
-from torch.utils.data import DataLoader, Dataset
 import torch.nn as nn
-import torch.nn.functional as F
 
-from torchvision import models
+from torch.utils.data import Dataset, DataLoader
 
 import pytorch_lightning as pl
 
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from config import Config
 
-# utils from src
-try:
-    from .config import Config
-except ImportError:
-    from config import Config
+from sklearn.model_selection import train_test_split
 
-
-# seed
-pl.seed_everything(Config.seed_val)
+from PIL import Image
 
 
 class GraphemeDataset(Dataset):
@@ -41,24 +30,18 @@ class GraphemeDataset(Dataset):
         # load raw image & normalize
         arr = np.load(os.path.join(self.images_dir, image_id+'.npy')) / 255.
         img = Image.fromarray(arr)
+
         if self.transform is not None:
-            try:
-                img = self.transform(image=img)['image']
-                # setup sample dict
-                sample = {
-                    'image': img
-                }
-            except:
-                img = self.transform(img)
-                img = np.array(img)
-                sample = {
-                    'image': th.from_numpy(img).float()
-                }
+            img = self.transform(img)
+            img = np.array(img)
+            sample = {
+                'image': th.from_numpy(img).float().unsqueeze(0)
+            }
 
         else:
             # setup sample dict
             sample = {
-                'image': th.from_numpy(np.array(img)).float()
+                'image': th.from_numpy(np.array(img)).float().unsqueeze(0)
             }
 
         if self.task == 'train':
@@ -80,7 +63,14 @@ class GraphemeDataset(Dataset):
 
 
 class DataModule(pl.LightningDataModule):
-    def __init__(self, df: pd.DataFrame, frac=1, validation_split=.25, train_batch_size=4, test_batch_size=4, transform: dict = None):
+    def __init__(
+        self, df: pd.DataFrame,
+        frac=1,
+        validation_split=.25,
+        train_batch_size=4,
+        test_batch_size=4,
+        transform: dict = {'train': None, 'validation': None}
+    ):
         super(DataModule, self).__init__()
         self.frac = frac
         self.df = df
@@ -131,7 +121,3 @@ class DataModule(pl.LightningDataModule):
             num_workers=Config.num_workers,
             shuffle=False
         )
-
-
-if __name__ == '__main__':
-    pass

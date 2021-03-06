@@ -17,22 +17,33 @@ import numpy as np
 import pandas as pd
 
 import os
-import gc
-try:
-    from .config import Config
-    from .dataset import DataModule, GraphemeDataset
-    from .model import GraphemeClassifier
 
-    from .utils import train_model, run_kFold
-except ImportError:
-    from config import Config
-    from dataset import DataModule, GraphemeDataset
-    from model import GraphemeClassifier
+from config import Config
+from dataset import DataModule, GraphemeDataset
+from model import GraphemeClassifier
 
-    from utils import train_model, run_kFold
+from utils import train_model, run_kFold
+
+import argparse
+
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument('--gpus', default=0, type=int)
+parser.add_argument('--num_epochs', default=Config.epochs, type=int)
+parser.add_argument('--base_model', default='resnet34', type=str,
+                    help='one of the architectures in the timm package or torchvision')
+parser.add_argument('--train_batch_size',
+                    default=Config.train_batch_size, type=int)
+parser.add_argument('--test_batch_size',
+                    default=Config.test_batch_size, type=int)
+parser.add_argument('--learning_rate', '-lr',
+                    default=Config.learning_rate, type=float)
 
 
 if __name__ == '__main__':
+    # get args
+    args = parser.parse_args()
 
     print('[INFO] Building dataset/datamodule')
     # get dataset/dataloader
@@ -63,8 +74,8 @@ if __name__ == '__main__':
         df=train_df,
         frac=1,
         validation_split=.3,
-        train_batch_size=Config.train_batch_size,
-        test_batch_size=Config.test_batch_size,
+        train_batch_size=args.train_batch_size,
+        test_batch_size=args.test_batch_size,
         transform=data_transforms
     )
 
@@ -89,24 +100,25 @@ if __name__ == '__main__':
         y=train_df.consonant_diacritic.values
     )
 
-    print(f'[INFO] Defining Model based on {Config.base_model} architecture')
+    #print(f'[INFO] Defining Model based on {Config.base_model} architecture')
     # define model/model architectures
     model = GraphemeClassifier(
-        base_encoder=Config.base_model,
+        base_encoder=args.base_model,
         arch_from='timm',
         vowels_class_weight=th.from_numpy(vowels_class_weight).float(),
         g_root_class_weight=th.from_numpy(g_root_class_weight).float(),
         consonant_class_weight=th.from_numpy(consonant_class_weight).float(),
         drop=0.25,
-        lr=Config.learning_rate,
+        lr=args.learning_rate,
         pretrained=True
     )
-    print(f'[INFO] Defining Callbacks')
+    print('[INFO] Defining Callbacks')
     # callbacks
 
     model_ckpt = ModelCheckpoint(
         filename=os.path.join(
-            Config.models_dir, f"bengali_grapheme-{Config.base_model}"),
+            Config.models_dir, "bengali_grapheme-{}".format(Config.base_model)
+        ),
         monitor='val_recall',
         mode="max"
     )
@@ -127,7 +139,7 @@ if __name__ == '__main__':
     callbacks_list = [es, model_ckpt, gpu_stats]
 
     # logger
-    print(f'[INFO] Defining Logger(s)...Default -> Tensorboard')
+    print('[INFO] Defining Logger(s)...Default -> Tensorboard')
     tb_logger = TensorBoardLogger(
         save_dir=Config.logs_dir,
         name='kaggle-bengali-ai',
@@ -135,12 +147,12 @@ if __name__ == '__main__':
     )
 
     # trainer
-    print(f'[INFO] Defining Trainer')
+    # print(f'[INFO] Defining Trainer')
     trainer = Trainer(
         gpus=1,
         precision=32,
         # fast_dev_run=True,
-        max_epochs=Config.epochs,
+        max_epochs=args.num_epochs,
         min_epochs=2,
         # plugins = 'deepspeed'
         logger=tb_logger,
@@ -148,26 +160,31 @@ if __name__ == '__main__':
     )
     try:
         # run training job
-        print(f'[INFO] Running training job for {Config.epochs} epochs\n\
-        train batch size : {Config.train_batch_size}\n\
-        test batch size : {Config.test_batch_size}\n\
-        lr : {Config.learning_rate}\n\
-        Base model : {Config.base_model}'
+        print("[INFO] Running training job for {} epochs\n\
+        train batch size : {}\n\
+        test batch size : {}\n\
+        lr : {}\n\
+        Base model : {}".format(
+            args.num_epochs,
+            args.train_batch_size,
+            args.test_batch_size,
+            args.learning_rate,
+            args.base_model
+        )
 
-              )
-        trainer, model = train_model(
+        )
+        trainer.fit(
             model=model,
-            datamodule=dm,
-            trainer=trainer
+            datamodule=dm
         )
 
         # save model for inference
-        print(f'[INFO] Saving model for later inference...')
+        print('[INFO] Saving model for later inference...')
         th.jit.save(
             model.to_torchscript(),
             os.path.join(Config.models_dir, 'grapheme-classifier-3-in-1.pt')
         )
-        print(f'[INFO] Process completed !')
+        print('[INFO] Process completed !')
         print(trainer.logged_metrics)
     except Exception as ex:
-        print(f'[ERROR] {ex}')
+        print('[ERROR] {}'.format(ex))

@@ -21,10 +21,10 @@ class Config:
     resize_shape = (100, 100)
     train_batch_size = 512
     test_batch_size = 512
-    epochs = 60
+    epochs = 2
     # seresnet50, seresnet152, efficientnet_b3, resnet101, resnext50_32x4d
-    base_model = "resnet18"
-    learning_rate = 0.04
+    base_model = "resnet34"
+    learning_rate = 0.02
     num_workers = 4
     device = "cuda"  # cuda -> GPU, "cpu"->CPU, "tpu"->TPU
     data_transform = "basic"  # fmix, cutmix, mixup
