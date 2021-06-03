@@ -44,4 +44,4 @@ By participating in the competition, you’ll hopefully accelerate Bengali handw
 ## Acknowledgements
 
 - The code is based on learning from the shared notebooks on kaggle
-- Some of the snippets code copied from anywhere will liked to their source (original implementation)
+- Some of the snippets code copied from anywhere will be linked to their source (original implementation for credits)
